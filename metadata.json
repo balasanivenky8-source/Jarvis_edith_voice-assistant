@@ -1,0 +1,12 @@
+{
+  "name": "Jarvis Voice Assistant",
+  "description": "Real-time voice-to-voice AI companion with live vision eyes and instant browser actions.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera",
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
