@@ -11,6 +11,7 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
@@ -61,6 +62,10 @@ public class MainActivity extends Activity {
         webView = new WebView(this);
         webView.setBackgroundColor(Color.parseColor("#06070b"));
 
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        cookieManager.setAcceptThirdPartyCookies(webView, true);
+
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -82,11 +87,19 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri target = request.getUrl();
-                if (target != null && !LOCAL_HOST.equalsIgnoreCase(target.getHost())) {
-                    startActivity(new Intent(Intent.ACTION_VIEW, target));
-                    return true;
+                if (target == null) return false;
+                String host = target.getHost();
+                if (LOCAL_HOST.equalsIgnoreCase(host)) {
+                    return false;
                 }
-                return false;
+                String backendHost = Uri.parse(getConfiguredBackendUrl()).getHost();
+                if (host != null && (host.equalsIgnoreCase(backendHost)
+                        || host.endsWith(".google.com")
+                        || host.endsWith(".run.app"))) {
+                    return false;
+                }
+                startActivity(new Intent(Intent.ACTION_VIEW, target));
+                return true;
             }
         });
 
@@ -100,6 +113,24 @@ public class MainActivity extends Activity {
         setContentView(webView);
         requestMissingRuntimePermissions();
         webView.loadUrl(LOCAL_ORIGIN);
+    }
+
+    private String getConfiguredBackendUrl() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        return prefs.getString(PREF_BACKEND_URL, getString(R.string.jarvis_app_url));
+    }
+
+    private static String normalizeServerUrl(String raw) {
+        String trimmed = raw.trim().replaceAll("/+$", "");
+        if (trimmed.isEmpty()) return "";
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+            if (trimmed.startsWith("localhost") || trimmed.startsWith("127.") || trimmed.startsWith("192.168.") || trimmed.startsWith("10.")) {
+                trimmed = "http://" + trimmed;
+            } else {
+                trimmed = "https://" + trimmed;
+            }
+        }
+        return trimmed;
     }
 
     private WebResourceResponse serveBundledAsset(String rawPath) {
@@ -126,7 +157,6 @@ public class MainActivity extends Activity {
                     stream
             );
         } catch (IOException e) {
-            // SPA fallback to index.html for unknown routes
             if (!cleanPath.contains(".")) {
                 try {
                     InputStream fallback = getAssets().open("www/index.html");
@@ -158,7 +188,7 @@ public class MainActivity extends Activity {
 
     private void showServerUrlDialog() {
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        String current = prefs.getString(PREF_BACKEND_URL, getString(R.string.jarvis_app_url));
+        String current = getConfiguredBackendUrl();
 
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -167,16 +197,21 @@ public class MainActivity extends Activity {
 
         new AlertDialog.Builder(this)
                 .setTitle("Jarvis Live Server URL")
-                .setMessage("Enter the HTTPS URL of your deployed Jarvis server (for example, your published AI Studio Shared URL).")
+                .setMessage("Enter the URL of your deployed Jarvis server (e.g. your published AI Studio Shared URL or local http://192.168.x.x:3000).")
                 .setView(input)
                 .setPositiveButton("Save", (dialog, which) -> {
-                    String next = input.getText().toString().trim();
+                    String next = normalizeServerUrl(input.getText().toString());
                     if (!next.isEmpty()) {
                         prefs.edit().putString(PREF_BACKEND_URL, next).apply();
                     }
                 })
-                .setNeutralButton("Reset", (dialog, which) ->
-                        prefs.edit().remove(PREF_BACKEND_URL).apply())
+                .setNeutralButton("Open in App", (dialog, which) -> {
+                    String next = normalizeServerUrl(input.getText().toString());
+                    if (!next.isEmpty()) {
+                        prefs.edit().putString(PREF_BACKEND_URL, next).apply();
+                        webView.loadUrl(next);
+                    }
+                })
                 .setNegativeButton("Cancel", null)
                 .show();
     }

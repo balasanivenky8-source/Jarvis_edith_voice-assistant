@@ -128,18 +128,48 @@ export class LiveSession {
       }
     ).JarvisAndroid;
     const customBackend = androidBridge?.getBackendUrl?.()?.trim();
+    const backendHttpBase = customBackend
+      ? customBackend.replace(/\/+$/, "")
+      : null;
+
     let wsUrl: string;
-    if (customBackend) {
-      const normalized = customBackend.replace(/\/+$/, "");
+    if (backendHttpBase) {
       wsUrl =
-        normalized.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:") +
+        backendHttpBase.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:") +
         "/live";
     } else {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       wsUrl = `${protocol}//${window.location.host}/live`;
     }
+
     const ws = new WebSocket(wsUrl);
     this.ws = ws;
+    let errorReported = false;
+
+    const diagnoseRemoteFailure = async (): Promise<string> => {
+      if (!backendHttpBase) {
+        return "WebSocket connection failed.";
+      }
+      try {
+        const res = await fetch(`${backendHttpBase}/api/health`, {
+          method: "GET",
+          mode: "cors",
+          redirect: "manual",
+        });
+        if (res.status === 404) {
+          return "Live server not deployed at this URL (404). Publish the app or tap 'Server' to enter a live server URL.";
+        }
+        if (res.type === "opaqueredirect" || res.status === 302 || res.status === 401 || res.status === 403) {
+          return "Server requires sign-in. Tap 'Server' and use 'Open in App' or enter a public server URL.";
+        }
+        if (!res.ok) {
+          return `Server returned HTTP ${res.status}. Tap 'Server' to verify the live backend URL.`;
+        }
+        return "WebSocket upgrade failed on the live server. Check server logs or tap 'Server'.";
+      } catch {
+        return `Cannot reach ${backendHttpBase}. Check internet connection or tap 'Server' to update the URL.`;
+      }
+    };
 
     ws.onmessage = (event) => {
       try {
@@ -161,6 +191,7 @@ export class LiveSession {
         ) {
           void this.handleToolCalls(packet.functionCalls);
         } else if (packet.type === "error") {
+          errorReported = true;
           this.callbacks.onError?.(
             typeof packet.message === "string"
               ? packet.message
@@ -176,11 +207,21 @@ export class LiveSession {
     };
 
     ws.onerror = () => {
-      this.callbacks.onError?.("WebSocket connection failed.");
+      if (errorReported) return;
+      errorReported = true;
+      void diagnoseRemoteFailure().then((msg) => {
+        this.callbacks.onError?.(msg);
+      });
       this.disconnect();
     };
 
     ws.onclose = () => {
+      if (!this.isReady && !errorReported) {
+        errorReported = true;
+        void diagnoseRemoteFailure().then((msg) => {
+          this.callbacks.onError?.(msg);
+        });
+      }
       if (this.state !== "disconnected") {
         this.disconnect();
       }
