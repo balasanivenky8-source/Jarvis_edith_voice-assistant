@@ -17,8 +17,11 @@ android {
     signingConfigs {
         getByName("debug") {
             val localKeystore = file("debug.keystore")
+            val rootKeystore = file("../../debug.keystore")
             if (localKeystore.exists()) {
                 storeFile = localKeystore
+            } else if (rootKeystore.exists()) {
+                storeFile = rootKeystore
             }
             storePassword = "android"
             keyAlias = "androiddebugkey"

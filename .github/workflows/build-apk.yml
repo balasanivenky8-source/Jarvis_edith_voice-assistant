@@ -96,6 +96,8 @@ jobs:
           gradle-version: "9.3.1"
 
       - name: Create temporary debug keystore
+        env:
+          PROJECT_DIR: ${{ steps.project.outputs.dir }}
         run: |
           set -euo pipefail
           KEYTOOL="$JAVA_HOME/bin/keytool"
@@ -121,9 +123,17 @@ jobs:
             exit 1
           fi
 
-          mkdir -p "$HOME/.android"
-          if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            cp ./debug.keystore "$HOME/.android/debug.keystore"
+          mkdir -p "$HOME/.android" "$HOME/.config/.android"
+          cp -f ./debug.keystore "$HOME/.android/debug.keystore"
+          cp -f ./debug.keystore "$HOME/.config/.android/debug.keystore"
+
+          if [ -n "${ANDROID_USER_HOME:-}" ]; then
+            mkdir -p "$ANDROID_USER_HOME"
+            cp -f ./debug.keystore "$ANDROID_USER_HOME/debug.keystore"
+          fi
+
+          if [ -d "$PROJECT_DIR/app" ] && [ ! -f "$PROJECT_DIR/app/debug.keystore" ]; then
+            cp ./debug.keystore "$PROJECT_DIR/app/debug.keystore"
           fi
 
           echo "Temporary debug keystore ready."
