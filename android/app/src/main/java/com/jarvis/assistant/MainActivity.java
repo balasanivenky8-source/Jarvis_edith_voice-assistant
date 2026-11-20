@@ -15,6 +15,7 @@ import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -24,6 +25,8 @@ import android.widget.EditText;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -44,13 +47,48 @@ public class MainActivity extends Activity {
     public class JarvisBridge {
         @JavascriptInterface
         public String getBackendUrl() {
-            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-            return prefs.getString(PREF_BACKEND_URL, getString(R.string.jarvis_app_url));
+            return getConfiguredBackendUrl();
         }
 
         @JavascriptInterface
         public void promptServerUrl() {
             runOnUiThread(() -> showServerUrlDialog());
+        }
+
+        @JavascriptInterface
+        public void openServerInApp() {
+            runOnUiThread(() -> {
+                String url = getConfiguredBackendUrl();
+                if (!url.isEmpty()) {
+                    webView.loadUrl(url);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public String probeServer(String rawUrl) {
+            String base = normalizeServerUrl(rawUrl == null ? "" : rawUrl);
+            if (base.isEmpty()) {
+                return "error:Empty URL";
+            }
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(base + "/api/health");
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setInstanceFollowRedirects(false);
+                conn.setConnectTimeout(4500);
+                conn.setReadTimeout(4500);
+                conn.setRequestMethod("GET");
+                int code = conn.getResponseCode();
+                String location = conn.getHeaderField("Location");
+                return code + ":" + (location == null ? "" : location);
+            } catch (Exception e) {
+                return "error:" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
+            }
         }
     }
 
@@ -71,6 +109,10 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setDatabaseEnabled(true);
+        String ua = settings.getUserAgentString();
+        if (ua != null) {
+            settings.setUserAgentString(ua.replace("; wv", ""));
+        }
 
         webView.addJavascriptInterface(new JarvisBridge(), "JarvisAndroid");
 
@@ -95,11 +137,51 @@ public class MainActivity extends Activity {
                 String backendHost = Uri.parse(getConfiguredBackendUrl()).getHost();
                 if (host != null && (host.equalsIgnoreCase(backendHost)
                         || host.endsWith(".google.com")
+                        || host.endsWith(".gstatic.com")
+                        || host.endsWith(".googleusercontent.com")
                         || host.endsWith(".run.app"))) {
                     return false;
                 }
                 startActivity(new Intent(Intent.ACTION_VIEW, target));
                 return true;
+            }
+
+            @Override
+            public void onReceivedHttpError(
+                    WebView view,
+                    WebResourceRequest request,
+                    WebResourceResponse errorResponse
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse);
+                if (request.isForMainFrame()
+                        && errorResponse != null
+                        && errorResponse.getStatusCode() == 404
+                        && request.getUrl() != null
+                        && !LOCAL_HOST.equalsIgnoreCase(request.getUrl().getHost())) {
+                    runOnUiThread(() -> {
+                        view.loadUrl(LOCAL_ORIGIN);
+                        new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("Server Not Deployed (404)")
+                                .setMessage("The remote server returned 404 Page Not Found. Publish/Share your app first or configure a live server URL.")
+                                .setPositiveButton("Configure Server", (d, w) -> showServerUrlDialog())
+                                .setNegativeButton("OK", null)
+                                .show();
+                    });
+                }
+            }
+
+            @Override
+            public void onReceivedError(
+                    WebView view,
+                    WebResourceRequest request,
+                    WebResourceError error
+            ) {
+                super.onReceivedError(view, request, error);
+                if (request.isForMainFrame()
+                        && request.getUrl() != null
+                        && !LOCAL_HOST.equalsIgnoreCase(request.getUrl().getHost())) {
+                    runOnUiThread(() -> view.loadUrl(LOCAL_ORIGIN));
+                }
             }
         });
 
@@ -197,7 +279,7 @@ public class MainActivity extends Activity {
 
         new AlertDialog.Builder(this)
                 .setTitle("Jarvis Live Server URL")
-                .setMessage("Enter the URL of your deployed Jarvis server (e.g. your published AI Studio Shared URL or local http://192.168.x.x:3000).")
+                .setMessage("Use your published AI Studio Shared URL (public), or tap 'Open in App' to sign in to an authenticated URL like your Dev URL.")
                 .setView(input)
                 .setPositiveButton("Save", (dialog, which) -> {
                     String next = normalizeServerUrl(input.getText().toString());

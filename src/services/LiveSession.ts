@@ -124,7 +124,10 @@ export class LiveSession {
 
     const androidBridge = (
       window as Window & {
-        JarvisAndroid?: { getBackendUrl?: () => string };
+        JarvisAndroid?: {
+          getBackendUrl?: () => string;
+          probeServer?: (url: string) => string;
+        };
       }
     ).JarvisAndroid;
     const customBackend = androidBridge?.getBackendUrl?.()?.trim();
@@ -150,6 +153,23 @@ export class LiveSession {
       if (!backendHttpBase) {
         return "WebSocket connection failed.";
       }
+
+      const nativeProbe = androidBridge?.probeServer?.(backendHttpBase);
+      if (nativeProbe) {
+        if (nativeProbe.startsWith("302:") || nativeProbe.startsWith("301:") || nativeProbe.startsWith("401:") || nativeProbe.startsWith("403:")) {
+          return "Sign-in required for this URL. Tap 'Server' → 'Open in App' to authenticate, or use your published Shared URL.";
+        }
+        if (nativeProbe.startsWith("404:")) {
+          return "Server not deployed at this URL (404). Publish/Share the app in AI Studio or tap 'Server' to enter a live server URL.";
+        }
+        if (nativeProbe.startsWith("200:")) {
+          return "Live server responded 200 OK, but WebSocket upgrade failed. Check server or tap 'Server' → 'Open in App'.";
+        }
+        if (nativeProbe.startsWith("error:")) {
+          return `Cannot reach ${backendHttpBase} (${nativeProbe.slice(6)}). Check internet or tap 'Server'.`;
+        }
+      }
+
       try {
         const res = await fetch(`${backendHttpBase}/api/health`, {
           method: "GET",
@@ -160,7 +180,7 @@ export class LiveSession {
           return "Live server not deployed at this URL (404). Publish the app or tap 'Server' to enter a live server URL.";
         }
         if (res.type === "opaqueredirect" || res.status === 302 || res.status === 401 || res.status === 403) {
-          return "Server requires sign-in. Tap 'Server' and use 'Open in App' or enter a public server URL.";
+          return "Server requires sign-in. Tap 'Server' → 'Open in App' to sign in, or use a public server URL.";
         }
         if (!res.ok) {
           return `Server returned HTTP ${res.status}. Tap 'Server' to verify the live backend URL.`;
