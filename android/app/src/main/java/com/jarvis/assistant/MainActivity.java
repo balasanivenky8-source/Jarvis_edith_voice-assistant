@@ -40,6 +40,7 @@ public class MainActivity extends Activity {
     private static final String LOCAL_ORIGIN = "https://" + LOCAL_HOST + "/";
     private static final String PREFS_NAME = "jarvis_prefs";
     private static final String PREF_BACKEND_URL = "backend_url";
+    private static final String PREF_DIRECT_MODE = "direct_mode";
 
     private WebView webView;
     private PermissionRequest pendingWebPermission;
@@ -84,6 +85,12 @@ public class MainActivity extends Activity {
                 conn.setConnectTimeout(4500);
                 conn.setReadTimeout(4500);
                 conn.setRequestMethod("GET");
+
+                String cookies = CookieManager.getInstance().getCookie(base);
+                if (cookies != null && !cookies.isEmpty()) {
+                    conn.setRequestProperty("Cookie", cookies);
+                }
+
                 int code = conn.getResponseCode();
                 String location = conn.getHeaderField("Location");
                 return code + ":" + (location == null ? "" : location);
@@ -114,9 +121,13 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setDatabaseEnabled(true);
+        settings.setJavaScriptCanOpenWindowsAutomatically(true);
+
+        // Strip WebView markers ("; wv" and "Version/x.y") so Google Sign-In works in-app
         String ua = settings.getUserAgentString();
         if (ua != null) {
-            settings.setUserAgentString(ua.replace("; wv", ""));
+            ua = ua.replace("; wv", "").replaceAll("Version/\\S+\\s*", "");
+            settings.setUserAgentString(ua);
         }
 
         webView.addJavascriptInterface(new JarvisBridge(), "JarvisAndroid");
@@ -154,6 +165,26 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                CookieManager.getInstance().flush();
+                if (url != null) {
+                    Uri uri = Uri.parse(url);
+                    String host = uri.getHost();
+                    String path = uri.getPath();
+                    String backendHost = Uri.parse(getConfiguredBackendUrl()).getHost();
+                    if (host != null
+                            && host.equalsIgnoreCase(backendHost)
+                            && (path == null || !path.contains("__cookie_check"))) {
+                        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                                .edit()
+                                .putBoolean(PREF_DIRECT_MODE, true)
+                                .apply();
+                    }
+                }
+            }
+
+            @Override
             public void onReceivedHttpError(
                     WebView view,
                     WebResourceRequest request,
@@ -165,9 +196,13 @@ public class MainActivity extends Activity {
                         && errorResponse.getStatusCode() == 404
                         && request.getUrl() != null
                         && !LOCAL_HOST.equalsIgnoreCase(request.getUrl().getHost())) {
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                            .edit()
+                            .putBoolean(PREF_DIRECT_MODE, false)
+                            .apply();
                     runOnUiThread(() -> {
                         view.loadUrl(LOCAL_ORIGIN);
-                        showConnectionHelpDialog("The Shared App URL returned 404 (not deployed yet).");
+                        showConnectionHelpDialog("The selected server URL returned 404 (not deployed yet).");
                     });
                 }
             }
@@ -182,6 +217,10 @@ public class MainActivity extends Activity {
                 if (request.isForMainFrame()
                         && request.getUrl() != null
                         && !LOCAL_HOST.equalsIgnoreCase(request.getUrl().getHost())) {
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                            .edit()
+                            .putBoolean(PREF_DIRECT_MODE, false)
+                            .apply();
                     runOnUiThread(() -> view.loadUrl(LOCAL_ORIGIN));
                 }
             }
@@ -196,7 +235,13 @@ public class MainActivity extends Activity {
 
         setContentView(webView);
         requestMissingRuntimePermissions();
-        webView.loadUrl(LOCAL_ORIGIN);
+
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        if (prefs.getBoolean(PREF_DIRECT_MODE, false)) {
+            webView.loadUrl(getConfiguredBackendUrl());
+        } else {
+            webView.loadUrl(LOCAL_ORIGIN);
+        }
     }
 
     private String getConfiguredBackendUrl() {
@@ -275,10 +320,13 @@ public class MainActivity extends Activity {
         String devUrl = getString(R.string.jarvis_dev_url);
 
         new AlertDialog.Builder(this)
-                .setTitle("Live Server Not Ready")
-                .setMessage(reason + "\n\nTo connect on mobile:\n• Click Share/Deploy in AI Studio so your Shared URL goes live, OR\n• Sign in via your active Dev URL inside the app.")
+                .setTitle("Live Server Connection")
+                .setMessage(reason + "\n\nOptions:\n• Tap 'Sign In via Dev URL' to authenticate inside the app.\n• Or deploy/share your AI Studio app so the Shared URL is public.")
                 .setPositiveButton("Sign In via Dev URL", (dialog, which) -> {
-                    prefs.edit().putString(PREF_BACKEND_URL, devUrl).apply();
+                    prefs.edit()
+                            .putString(PREF_BACKEND_URL, devUrl)
+                            .putBoolean(PREF_DIRECT_MODE, false)
+                            .apply();
                     webView.loadUrl(devUrl);
                 })
                 .setNeutralButton("Custom URL", (dialog, which) -> showServerUrlDialog())
@@ -297,22 +345,35 @@ public class MainActivity extends Activity {
 
         new AlertDialog.Builder(this)
                 .setTitle("Jarvis Live Server URL")
-                .setMessage("Enter your published AI Studio Shared URL, a custom Cloud Run URL, or tap 'Open in App' to sign into your Dev URL.")
+                .setMessage("Enter a live Jarvis server URL. Use 'Open in App' for URLs that require Google sign-in.")
                 .setView(input)
                 .setPositiveButton("Save", (dialog, which) -> {
                     String next = normalizeServerUrl(input.getText().toString());
                     if (!next.isEmpty()) {
-                        prefs.edit().putString(PREF_BACKEND_URL, next).apply();
+                        prefs.edit()
+                                .putString(PREF_BACKEND_URL, next)
+                                .putBoolean(PREF_DIRECT_MODE, false)
+                                .apply();
+                        webView.loadUrl(LOCAL_ORIGIN);
                     }
                 })
                 .setNeutralButton("Open in App", (dialog, which) -> {
                     String next = normalizeServerUrl(input.getText().toString());
                     if (!next.isEmpty()) {
-                        prefs.edit().putString(PREF_BACKEND_URL, next).apply();
+                        prefs.edit()
+                                .putString(PREF_BACKEND_URL, next)
+                                .putBoolean(PREF_DIRECT_MODE, false)
+                                .apply();
                         webView.loadUrl(next);
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton("Reset", (dialog, which) -> {
+                    prefs.edit()
+                            .remove(PREF_BACKEND_URL)
+                            .putBoolean(PREF_DIRECT_MODE, false)
+                            .apply();
+                    webView.loadUrl(LOCAL_ORIGIN);
+                })
                 .show();
     }
 
