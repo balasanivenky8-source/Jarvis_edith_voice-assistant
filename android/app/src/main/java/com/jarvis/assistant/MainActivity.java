@@ -3,26 +3,55 @@ package com.jarvis.assistant;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.InputType;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.EditText;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 public class MainActivity extends Activity {
 
     private static final int PERMISSION_REQUEST_CODE = 1001;
+    private static final String LOCAL_HOST = "jarvis.local";
+    private static final String LOCAL_ORIGIN = "https://" + LOCAL_HOST + "/";
+    private static final String PREFS_NAME = "jarvis_prefs";
+    private static final String PREF_BACKEND_URL = "backend_url";
+
     private WebView webView;
     private PermissionRequest pendingWebPermission;
+
+    public class JarvisBridge {
+        @JavascriptInterface
+        public String getBackendUrl() {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            return prefs.getString(PREF_BACKEND_URL, getString(R.string.jarvis_app_url));
+        }
+
+        @JavascriptInterface
+        public void promptServerUrl() {
+            runOnUiThread(() -> showServerUrlDialog());
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -38,15 +67,22 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setDatabaseEnabled(true);
 
-        final String appUrl = getString(R.string.jarvis_app_url);
-        final Uri appUri = Uri.parse(appUrl);
+        webView.addJavascriptInterface(new JarvisBridge(), "JarvisAndroid");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                Uri url = request.getUrl();
+                if (url != null && LOCAL_HOST.equalsIgnoreCase(url.getHost())) {
+                    return serveBundledAsset(url.getPath());
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri target = request.getUrl();
-                if (target != null && appUri.getHost() != null
-                        && !appUri.getHost().equalsIgnoreCase(target.getHost())) {
+                if (target != null && !LOCAL_HOST.equalsIgnoreCase(target.getHost())) {
                     startActivity(new Intent(Intent.ACTION_VIEW, target));
                     return true;
                 }
@@ -63,7 +99,86 @@ public class MainActivity extends Activity {
 
         setContentView(webView);
         requestMissingRuntimePermissions();
-        webView.loadUrl(appUrl);
+        webView.loadUrl(LOCAL_ORIGIN);
+    }
+
+    private WebResourceResponse serveBundledAsset(String rawPath) {
+        String cleanPath = (rawPath == null || rawPath.isEmpty() || "/".equals(rawPath))
+                ? "index.html"
+                : rawPath.replaceFirst("^/+", "");
+
+        if (cleanPath.contains("..")) {
+            return null;
+        }
+
+        String assetPath = "www/" + cleanPath;
+        try {
+            InputStream stream = getAssets().open(assetPath);
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Access-Control-Allow-Origin", "*");
+            headers.put("Cache-Control", "no-cache");
+            return new WebResourceResponse(
+                    guessMimeType(cleanPath),
+                    "UTF-8",
+                    200,
+                    "OK",
+                    headers,
+                    stream
+            );
+        } catch (IOException e) {
+            // SPA fallback to index.html for unknown routes
+            if (!cleanPath.contains(".")) {
+                try {
+                    InputStream fallback = getAssets().open("www/index.html");
+                    Map<String, String> headers = new HashMap<>();
+                    headers.put("Access-Control-Allow-Origin", "*");
+                    return new WebResourceResponse("text/html", "UTF-8", 200, "OK", headers, fallback);
+                } catch (IOException ignored) {
+                }
+            }
+            return null;
+        }
+    }
+
+    private static String guessMimeType(String path) {
+        String lower = path.toLowerCase(Locale.US);
+        if (lower.endsWith(".html")) return "text/html";
+        if (lower.endsWith(".js") || lower.endsWith(".mjs")) return "application/javascript";
+        if (lower.endsWith(".css")) return "text/css";
+        if (lower.endsWith(".json")) return "application/json";
+        if (lower.endsWith(".svg")) return "image/svg+xml";
+        if (lower.endsWith(".png")) return "image/png";
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+        if (lower.endsWith(".webp")) return "image/webp";
+        if (lower.endsWith(".woff2")) return "font/woff2";
+        if (lower.endsWith(".woff")) return "font/woff";
+        if (lower.endsWith(".ico")) return "image/x-icon";
+        return "application/octet-stream";
+    }
+
+    private void showServerUrlDialog() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        String current = prefs.getString(PREF_BACKEND_URL, getString(R.string.jarvis_app_url));
+
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setText(current);
+        input.setSelection(current.length());
+
+        new AlertDialog.Builder(this)
+                .setTitle("Jarvis Live Server URL")
+                .setMessage("Enter the HTTPS URL of your deployed Jarvis server (for example, your published AI Studio Shared URL).")
+                .setView(input)
+                .setPositiveButton("Save", (dialog, which) -> {
+                    String next = input.getText().toString().trim();
+                    if (!next.isEmpty()) {
+                        prefs.edit().putString(PREF_BACKEND_URL, next).apply();
+                    }
+                })
+                .setNeutralButton("Reset", (dialog, which) ->
+                        prefs.edit().remove(PREF_BACKEND_URL).apply())
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void handleWebPermissionRequest(PermissionRequest request) {

@@ -194,6 +194,29 @@ export default function App() {
           ) : (
             <span>{state === "connecting" ? "Connecting" : "Audio Standby"}</span>
           )}
+          {typeof window !== "undefined" &&
+            (
+              window as Window & {
+                JarvisAndroid?: { promptServerUrl?: () => void };
+              }
+            ).JarvisAndroid?.promptServerUrl && (
+              <>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    (
+                      window as Window & {
+                        JarvisAndroid?: { promptServerUrl?: () => void };
+                      }
+                    ).JarvisAndroid?.promptServerUrl?.()
+                  }
+                  className="text-sky-300 hover:text-sky-200 underline underline-offset-4 py-2 cursor-pointer"
+                >
+                  Server
+                </button>
+              </>
+            )}
         </div>
       </header>
 

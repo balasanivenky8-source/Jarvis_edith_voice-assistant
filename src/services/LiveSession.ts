@@ -122,8 +122,22 @@ export class LiveSession {
       return;
     }
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/live`;
+    const androidBridge = (
+      window as Window & {
+        JarvisAndroid?: { getBackendUrl?: () => string };
+      }
+    ).JarvisAndroid;
+    const customBackend = androidBridge?.getBackendUrl?.()?.trim();
+    let wsUrl: string;
+    if (customBackend) {
+      const normalized = customBackend.replace(/\/+$/, "");
+      wsUrl =
+        normalized.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:") +
+        "/live";
+    } else {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      wsUrl = `${protocol}//${window.location.host}/live`;
+    }
     const ws = new WebSocket(wsUrl);
     this.ws = ws;
 
