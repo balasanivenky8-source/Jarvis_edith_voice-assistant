@@ -56,6 +56,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void showConnectionHelp(String reason) {
+            runOnUiThread(() -> showConnectionHelpDialog(reason));
+        }
+
+        @JavascriptInterface
         public void openServerInApp() {
             runOnUiThread(() -> {
                 String url = getConfiguredBackendUrl();
@@ -136,9 +141,11 @@ public class MainActivity extends Activity {
                 }
                 String backendHost = Uri.parse(getConfiguredBackendUrl()).getHost();
                 if (host != null && (host.equalsIgnoreCase(backendHost)
+                        || host.equalsIgnoreCase("google.com")
                         || host.endsWith(".google.com")
                         || host.endsWith(".gstatic.com")
                         || host.endsWith(".googleusercontent.com")
+                        || host.endsWith(".youtube.com")
                         || host.endsWith(".run.app"))) {
                     return false;
                 }
@@ -160,12 +167,7 @@ public class MainActivity extends Activity {
                         && !LOCAL_HOST.equalsIgnoreCase(request.getUrl().getHost())) {
                     runOnUiThread(() -> {
                         view.loadUrl(LOCAL_ORIGIN);
-                        new AlertDialog.Builder(MainActivity.this)
-                                .setTitle("Server Not Deployed (404)")
-                                .setMessage("The remote server returned 404 Page Not Found. Publish/Share your app first or configure a live server URL.")
-                                .setPositiveButton("Configure Server", (d, w) -> showServerUrlDialog())
-                                .setNegativeButton("OK", null)
-                                .show();
+                        showConnectionHelpDialog("The Shared App URL returned 404 (not deployed yet).");
                     });
                 }
             }
@@ -268,6 +270,22 @@ public class MainActivity extends Activity {
         return "application/octet-stream";
     }
 
+    private void showConnectionHelpDialog(String reason) {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        String devUrl = getString(R.string.jarvis_dev_url);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Live Server Not Ready")
+                .setMessage(reason + "\n\nTo connect on mobile:\n• Click Share/Deploy in AI Studio so your Shared URL goes live, OR\n• Sign in via your active Dev URL inside the app.")
+                .setPositiveButton("Sign In via Dev URL", (dialog, which) -> {
+                    prefs.edit().putString(PREF_BACKEND_URL, devUrl).apply();
+                    webView.loadUrl(devUrl);
+                })
+                .setNeutralButton("Custom URL", (dialog, which) -> showServerUrlDialog())
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
     private void showServerUrlDialog() {
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         String current = getConfiguredBackendUrl();
@@ -279,7 +297,7 @@ public class MainActivity extends Activity {
 
         new AlertDialog.Builder(this)
                 .setTitle("Jarvis Live Server URL")
-                .setMessage("Use your published AI Studio Shared URL (public), or tap 'Open in App' to sign in to an authenticated URL like your Dev URL.")
+                .setMessage("Enter your published AI Studio Shared URL, a custom Cloud Run URL, or tap 'Open in App' to sign into your Dev URL.")
                 .setView(input)
                 .setPositiveButton("Save", (dialog, which) -> {
                     String next = normalizeServerUrl(input.getText().toString());

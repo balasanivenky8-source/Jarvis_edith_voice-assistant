@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">Jarvis AI</string>
     <string name="jarvis_app_url">https://ais-pre-7kcecxpcpmoqp24mz7xggj-1041091695360.asia-southeast1.run.app</string>
+    <string name="jarvis_dev_url">https://ais-dev-7kcecxpcpmoqp24mz7xggj-1041091695360.asia-southeast1.run.app</string>
 </resources>

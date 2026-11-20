@@ -127,10 +127,14 @@ export class LiveSession {
         JarvisAndroid?: {
           getBackendUrl?: () => string;
           probeServer?: (url: string) => string;
+          showConnectionHelp?: (reason: string) => void;
         };
       }
     ).JarvisAndroid;
-    const customBackend = androidBridge?.getBackendUrl?.()?.trim();
+    const isBundledLocalOrigin = window.location.host === "jarvis.local";
+    const customBackend = isBundledLocalOrigin
+      ? androidBridge?.getBackendUrl?.()?.trim()
+      : undefined;
     const backendHttpBase = customBackend
       ? customBackend.replace(/\/+$/, "")
       : null;
@@ -157,10 +161,14 @@ export class LiveSession {
       const nativeProbe = androidBridge?.probeServer?.(backendHttpBase);
       if (nativeProbe) {
         if (nativeProbe.startsWith("302:") || nativeProbe.startsWith("301:") || nativeProbe.startsWith("401:") || nativeProbe.startsWith("403:")) {
-          return "Sign-in required for this URL. Tap 'Server' → 'Open in App' to authenticate, or use your published Shared URL.";
+          const msg = "Sign-in required for this URL. Tap 'Server' → 'Open in App' to authenticate, or use your published Shared URL.";
+          androidBridge?.showConnectionHelp?.("This server URL requires Google sign-in before WebSocket audio can connect.");
+          return msg;
         }
         if (nativeProbe.startsWith("404:")) {
-          return "Server not deployed at this URL (404). Publish/Share the app in AI Studio or tap 'Server' to enter a live server URL.";
+          const msg = "Server not deployed at this URL (404). Publish/Share the app in AI Studio or sign in via your Dev URL.";
+          androidBridge?.showConnectionHelp?.("The Shared App URL is returning 404 because the app has not been published/shared yet.");
+          return msg;
         }
         if (nativeProbe.startsWith("200:")) {
           return "Live server responded 200 OK, but WebSocket upgrade failed. Check server or tap 'Server' → 'Open in App'.";
